@@ -1,41 +1,44 @@
-import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
-import {createMonoPayMiddleware} from "monopay-server-sdk"
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { createMonoPayMiddleware } from "monopay-server-sdk";
 
-const apiKey = process.env.NEXT_PUBLIC_MONOPAY_API_KEY;
-console.log("apiKey", apiKey)
+const apiKey = process.env.NEXT_PUBLIC_MONOPAY_API_KEY!;
+const hostApi = process.env.NEXT_PUBLIC_MONOPAY_HOST_API;
 
-if (!apiKey) {
-  throw new Error('MONOPAY_API_KEY environment variable is not set');
-}
+const monoPay = createMonoPayMiddleware(apiKey, hostApi);
 
-const monoPayMiddleware = createMonoPayMiddleware(apiKey,process.env.NEXT_PUBLIC_MONOPAY_HOST_API);
-export async function proxy(request: NextRequest) {
-  try {
-    const response = await monoPayMiddleware(request);
-    console.log("respone in the middlware", response)
-
-    // Payment required
-    if (response.status === 402) {
-      return response;
-    }
-
-    // Errors
-    if (response.status === 401 || response.status === 403 || response.status === 500) {
-      return response;
-    }
-
-    // Success - continue to next
-    return NextResponse.next();
-  } catch (error) {
-    console.error('Middleware error:', error);
-    return new Response(JSON.stringify({ error: 'Internal server error' }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    });
+export default async function proxy(req: NextRequest) {
+  // ---- 1. Handle CORS preflight ----
+  if (req.method === "OPTIONS") {
+    const res = new NextResponse("OK", { status: 200 });
+    res.headers.set("Access-Control-Allow-Origin", "*");
+    res.headers.set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.headers.set("Access-Control-Allow-Headers", "*");
+    return res;
   }
+
+  // ---- 2. Forward request to your MonoPay server middleware ----
+  const sdkResponse = await monoPay(req);
+
+  // ---- 3. If not 200, return its response (402, 401, 403, 500) ----
+  if (sdkResponse.status !== 200) {
+    const body = await sdkResponse.text();
+    const res = new NextResponse(body, { status: sdkResponse.status });
+
+    // Inject CORS headers here
+    res.headers.set("Access-Control-Allow-Origin", "*");
+    res.headers.set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.headers.set("Access-Control-Allow-Headers", "*");
+
+    return res;
+  }
+
+  // ---- 4. Allow request to continue ----
+  const res = NextResponse.next();
+  res.headers.set("Access-Control-Allow-Origin", "*");
+  return res;
 }
 
 export const config = {
-  matcher: ['/((?!_next|favicon.ico|public).*)'],
+  matcher: "/:path*",
 };
